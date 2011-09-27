@@ -286,6 +286,7 @@ class OAuth2(object):
       result = _parse_json(payload)
     except:
       logging.exception('Invalid Facebook payload - it is not json \'%s\'.' % payload)
+      return None
       
     # check signature
     algorithm = result.get('algorithm')
