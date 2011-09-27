@@ -14,6 +14,11 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+import logging
+import base64
+import hmac
+import binascii
+
 """Python client library for the Facebook Platform.
 
 This client library is designed to support the Graph API and the official
@@ -37,6 +42,7 @@ import cgi
 import hashlib
 import time
 import urllib
+import urllib2
 
 # Find a JSON parser
 try:
@@ -168,8 +174,11 @@ class GraphAPI(object):
             else:
                 args["access_token"] = self.access_token
         post_data = None if post_args is None else urllib.urlencode(post_args)
-        file = urllib.urlopen("https://graph.facebook.com/" + path + "?" +
-                              urllib.urlencode(args), post_data)
+        logging.debug('args: %s' % args)
+        logging.debug('https://graph.facebook.com/' + path + '?' + urllib.urlencode(args))
+        logging.debug('post_data: %s' % post_data)        
+        file = urllib2.urlopen("https://graph.facebook.com/" + path + "?" +
+                               urllib.urlencode(args), post_data)
         try:
             response = _parse_json(file.read())
         finally:
@@ -202,7 +211,8 @@ def get_user_from_cookie(cookies, app_id, app_secret):
     authentication at http://developers.facebook.com/docs/authentication/.
     """
     cookie = cookies.get("fbs_" + app_id, "")
-    if not cookie: return None
+    if not cookie: 
+      return None
     args = dict((k, v[-1]) for k, v in cgi.parse_qs(cookie.strip('"')).items())
     payload = "".join(k + "=" + args[k] for k in sorted(args.keys())
                       if k != "sig")
@@ -212,3 +222,118 @@ def get_user_from_cookie(cookies, app_id, app_secret):
         return args
     else:
         return None
+
+## \author Cezary K. Wagner
+## Interface to Facebook OAuth2.
+class OAuth2(object):
+  ## Get user_id and code for further authorization.
+  ## \param cookies - dictionary of cookies containing Facebook cookie fbsr_*
+  ## \param applicationId - Facebook application id
+  ## \param applicationSecret - Facebook application secret
+  ## \return dictionary of oauth2 cookie values (issued_at, code, user_id, algorithm) or None
+  ## if cookie is invalid (bad format, failed decoding, failed json parse, unknown signing algorithm,
+  ## invalid signature)
+  @staticmethod
+  def getUserFromCookie(cookies, applicationId, applicationSecret):
+    """
+    Facebook JavaScript SDK at http://github.com/facebook/connect-js/. 
+    More about authentication at http://developers.facebook.com/docs/authentication/.
+    More about signed request at http://developers.facebook.com/docs/authentication/signed_request/.
+    """
+    # get cookie
+    cookieName = 'fbsr_' + applicationId    
+    cookie = cookies.get(cookieName)
+    if cookie is None:
+      # logging.debug('No Facebook cookie \'%s\'.' % cookieName)
+      return None
+    
+    # split cookie values by dot
+    cookieValues = cookie.split('.', 1)
+    # check if it two values
+    if len(cookieValues) != 2:
+      logging.error('Invalid Facebook cookie - should contain signature and payload \'%s\'.' % cookie)
+      return None
+    encodedSignature, encodedPayload = cookieValues
+    
+    # fix padding to allow encoding
+    rest = len(encodedSignature) % 4
+    if rest:
+      logging.debug('Facebook signature padding correction %s.' % (4 - rest))
+      encodedSignature += '=' * (4 - rest) 
+
+    rest = len(encodedPayload) % 4
+    if rest:
+      logging.debug('Facebook payload padding correction %s.' % (4 - rest))
+      encodedPayload += '=' * (4 - rest) 
+
+    # encode data
+    try:
+      signature = base64.urlsafe_b64decode(encodedSignature)
+    except:
+      logging.exception('Invalid Facebook signature - unable to decode \'%s\'.' % encodedSignature)
+      return None
+    
+    try:
+      payload = base64.urlsafe_b64decode(encodedPayload)
+    except:
+      logging.exception('Invalid Facebook payload - unable to decode \'%s\'.' % encodedPayload)
+      return None
+    
+    logging.debug(payload)
+
+    # parse payload to json
+    try:
+      result = _parse_json(payload)
+    except:
+      logging.exception('Invalid Facebook payload - it is not json \'%s\'.' % payload)
+      
+    # check signature
+    algorithm = result.get('algorithm')
+    if algorithm is None:
+      logging.error('Invalid Facebook payload - no algorithm variable.')
+      return None
+    if algorithm != 'HMAC-SHA256':
+      logging.error('Invalid Facebook payload - unknown signing algorithm \'%s\'.' % algorithm)
+      return None
+    
+    # calculate signature to compare
+    expectedSignature = hmac.new(key = applicationSecret, msg = encodedPayload, digestmod = hashlib.sha256).digest() 
+    if signature != expectedSignature:
+      logging.error('Invalid Facebook signature \'%s\' should be \'%s\'.' %
+                    (binascii.hexlify(signature), binascii.hexlify(expectedSignature)))
+      return None
+    
+    return result
+
+  ## Get user_id and code for further authorization.
+  ## \param cookies - dictionary of cookies containing Facebook cookie fbsr_*
+  ## \param applicationId - Facebook application id
+  ## \param applicationSecret - Facebook application secret
+  ## \param code - code for getting access token
+  ## \return dictionary of oauth2 access token values (access_token, expires) 
+  @staticmethod
+  def getAccessTokenFromCode(applicationId, applicationSecret, code):
+    try:
+      url = (('https://graph.facebook.com/oauth/access_token'
+              '?client_id=%s&client_secret=%s&code=%s&redirect_uri=') 
+             % (applicationId, applicationSecret, code))
+      response = urllib2.urlopen(url).read()
+    except:
+      logging.exception('Failed to open Facebook url and get access token from code \'%s\'.' %  url)
+      return None
+      
+    # parse results
+    result = {}
+    params = response.split('&')
+    for param in params:
+      try:
+        key, value = param.split('=', 1)
+        result[key] = value
+      except:
+        logging.exception('Facebook invalid access token response format \'%s\'.' % param)
+        return None
+      
+    return result
+      
+    
+    
