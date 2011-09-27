@@ -255,28 +255,23 @@ class OAuth2(object):
       return None
     encodedSignature, encodedPayload = cookieValues
     
-    # fix padding to allow encoding
-    rest = len(encodedSignature) % 4
-    if rest:
-      logging.debug('Facebook signature padding correction %s.' % (4 - rest))
-      encodedSignature += '=' * (4 - rest) 
-
-    rest = len(encodedPayload) % 4
-    if rest:
-      logging.debug('Facebook payload padding correction %s.' % (4 - rest))
-      encodedPayload += '=' * (4 - rest) 
-
     # encode data
     try:
-      signature = base64.urlsafe_b64decode(encodedSignature)
+      # add padding if missed
+      paddedEncodedSignature = encodedSignature + '=' * ((4 - len(encodedSignature) % 4) % 4)
+      signature = base64.urlsafe_b64decode(paddedEncodedSignature)
     except:
       logging.exception('Invalid Facebook signature - unable to decode \'%s\'.' % encodedSignature)
+      logging.debug('Cookie is \'%s\'.' % cookie)
       return None
     
     try:
-      payload = base64.urlsafe_b64decode(encodedPayload)
+      # add padding if missed
+      paddedEncodedSignature = encodedPayload + '=' * ((4 - len(encodedPayload) % 4) % 4)
+      payload = base64.urlsafe_b64decode(paddedEncodedSignature)
     except:
       logging.exception('Invalid Facebook payload - unable to decode \'%s\'.' % encodedPayload)
+      logging.debug('Cookie is \'%s\'.' % cookie)
       return None
     
     logging.debug(payload)
@@ -286,15 +281,18 @@ class OAuth2(object):
       result = _parse_json(payload)
     except:
       logging.exception('Invalid Facebook payload - it is not json \'%s\'.' % payload)
+      logging.debug('Cookie is \'%s\'.' % cookie)
       return None
       
     # check signature
     algorithm = result.get('algorithm')
     if algorithm is None:
       logging.error('Invalid Facebook payload - no algorithm variable.')
+      logging.debug('Cookie is \'%s\'.' % cookie)
       return None
     if algorithm != 'HMAC-SHA256':
       logging.error('Invalid Facebook payload - unknown signing algorithm \'%s\'.' % algorithm)
+      logging.debug('Cookie is \'%s\'.' % cookie)
       return None
     
     # calculate signature to compare
@@ -302,6 +300,7 @@ class OAuth2(object):
     if signature != expectedSignature:
       logging.error('Invalid Facebook signature \'%s\' should be \'%s\'.' %
                     (binascii.hexlify(signature), binascii.hexlify(expectedSignature)))
+      logging.debug('Cookie is \'%s\'.' % cookie)
       return None
     
     return result
